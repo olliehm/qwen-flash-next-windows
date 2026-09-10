@@ -1,0 +1,8 @@
+# runtime artifacts
+shim/.venv/
+shim/__pycache__/
+shim/shim.log*
+shim/footprint_table.json
+scripts/*.log
+scripts/*.log.stderr
+*.bak*

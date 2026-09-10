@@ -1,0 +1,88 @@
+{
+  "_comment": "Admission-shim config EXAMPLE (copy to footprint_table.json and edit). Footprints are MEASURED GPU-dedicated deltas, not estimates: load the model alone, read '\\GPU Adapter Memory(*)\\Dedicated Usage' before and after (scripts/measure-fit.ps1 helps). Each footprint is only valid at 'measured_ctx'; the shim warns at startup if a plane's live recipe_options.ctx_size drifts from it.",
+  "schema_version": 2,
+
+  "safe_budget_gb": 100,
+  "_budget_note": "Total iGPU carve minus a reserve. This example machine: 112 GB usable carve - 12 GB reserved.",
+
+  "runtime_slack_gb": 1.5,
+  "_slack_note": "Per-resident-model allowance for growth past the load-time delta. Measured here: ~1.1 GB/model; 1.5 is deliberately conservative.",
+
+  "busy_wait_seconds": 45,
+  "busy_poll_interval_s": 2.0,
+  "_busy_note": "If an eviction candidate is is_busy/is_streaming, wait up to busy_wait_seconds for it to go idle, then evict. Still busy at timeout -> REFUSE with 503, never force-evict a live generation. 0 = fail fast.",
+
+  "planes": {
+    "A": {
+      "base_url": "http://127.0.0.1:13305",
+      "role": "dense",
+      "engine_pin": "rocm-nightly b1297",
+      "engine_pin_reason": "llamacpp-rocm#123 corrupts DENSE models on gfx1151 from b1298 on (empty output at depth). MoE models are unaffected. Pin dense planes to b1297 until it is fixed."
+    },
+    "B": {
+      "base_url": "http://127.0.0.1:13306",
+      "role": "moe",
+      "engine_pin": "rocm-nightly b1314",
+      "engine_pin_reason": "MoE models are unaffected by llamacpp-rocm#123, so this plane may track newer builds."
+    },
+    "C": {
+      "base_url": "http://127.0.0.1:13307",
+      "role": "flashnext",
+      "engine_pin": "local rdna-boosts fork build (stew675 patches incl. qwen4exp MTP; unmerged upstream as PRs 27836/28243/28118)",
+      "engine_pin_reason": "qwen4exp MTP needs the locally-built fork engine until the upstream PRs merge. Localhost-only bind; reachable via this shim."
+    }
+  },
+
+  "models": [
+    {
+      "name": "classifier-E4B",
+      "plane": "A",
+      "footprint_gb": 4.4,
+      "measured_ctx": 16384,
+      "prefer_keep": true,
+      "notes": "Small always-on classifier driven by scheduled automations. Reload is only ~6s, but it is cheap to keep and expensive to be missing, so it is evicted only as a last resort."
+    },
+    {
+      "name": "Qwen3.8-27B-Q6-MTP",
+      "plane": "A",
+      "footprint_gb": 33.9,
+      "measured_ctx": 131072,
+      "notes": "Dense Q6 + external Q4_0 MTP drafter (n8 p0.5), vision+video. Dense -> must stay on plane A / b1297 (see planes.A.engine_pin_reason)."
+    },
+    {
+      "name": "gemma-4-26B-Q8-MTP",
+      "plane": "B",
+      "footprint_gb": 31.9,
+      "measured_ctx": 131000,
+      "notes": "MoE A4B Q8 + MTP drafter."
+    },
+    {
+      "name": "Qwen3.6-35B-A3B-DFlash",
+      "plane": "B",
+      "footprint_gb": 46.6,
+      "measured_ctx": 262144,
+      "notes": "MoE A3B + DFlash drafter."
+    },
+    {
+      "name": "Qwen3.5-122B-A10B-MTP-GGUF",
+      "plane": "B",
+      "footprint_gb": 76.9,
+      "measured_ctx": 65536,
+      "notes": "Registered on both planes on this machine; the plane-A registration is a leftover and must never be routed to - which is why plane ownership is explicit config, not discovery."
+    },
+    {
+      "name": "gpt-oss-120b-mxfp-GGUF",
+      "plane": "B",
+      "footprint_gb": 64.7,
+      "measured_ctx": 65536,
+      "notes": "Also dual-registered; same explicit-ownership rule as the 122B."
+    },
+    {
+      "name": "Qwen3.8-Flash-Next-MTP",
+      "plane": "C",
+      "footprint_gb": 74.0,
+      "measured_ctx": 262144,
+      "notes": "MEASURED at 262k ctx: 61.2 target + 3.2 draft + 8.75 KV (incl. QSA indexer) + ~2 compute. The 26.8 GiB PLE n-gram table lands in HOST mmap, not the carve. Requires the fork engine (stock engines fail with: unknown model architecture 'qwen4exp'). MTP draft accept 90-100% with p_min 0.75."
+    }
+  ]
+}
